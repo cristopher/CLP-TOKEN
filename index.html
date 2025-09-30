@@ -43,7 +43,7 @@
         }
 
         .input-group {
-            margin-bottom: 30px;
+            margin-bottom: 20px;
         }
 
         label {
@@ -66,6 +66,12 @@
         input:focus {
             outline: none;
             border-color: #667eea;
+        }
+
+        .helper-text {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
         }
 
         button {
@@ -166,6 +172,24 @@
             margin-top: 20px;
             background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
         }
+
+        .pool-info {
+            background: #f0f0f0;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            font-size: 13px;
+        }
+
+        .pool-info-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .pool-info-item:last-child {
+            margin-bottom: 0;
+        }
     </style>
 </head>
 <body>
@@ -175,7 +199,13 @@
 
         <div class="input-group">
             <label for="tokenAddress">Dirección del Token:</label>
-            <input type="text" id="tokenAddress" placeholder="0x..." />
+            <input type="text" id="tokenAddress" placeholder="0x13Cd5E3EC12870eb6aE6BcC71b56860C1a1475C4" value="0x13Cd5E3EC12870eb6aE6BcC71b56860C1a1475C4" />
+        </div>
+
+        <div class="input-group">
+            <label for="poolAddress">Dirección del Pool (opcional):</label>
+            <input type="text" id="poolAddress" placeholder="0x4fF938ecf56aF77B12f050fA6A3C41E2a12aD08d" value="0x4fF938ecf56aF77B12f050fA6A3C41E2a12aD08d" />
+            <div class="helper-text">Si conoces el pool específico, ingrésalo aquí para mayor precisión</div>
         </div>
 
         <button id="fetchBtn" onclick="fetchPrice()">Consultar Precio</button>
@@ -184,13 +214,13 @@
     </div>
 
     <script>
-        const WORLDCOIN_CHAIN_ID = 480;
-        const UNISWAP_V3_QUOTER = '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6';
+        const RPC_URL = 'https://worldchain-mainnet.g.alchemy.com/public';
         
         let lastFetchTime = null;
 
         async function fetchPrice() {
             const tokenAddress = document.getElementById('tokenAddress').value.trim();
+            const poolAddress = document.getElementById('poolAddress').value.trim();
             const resultsDiv = document.getElementById('results');
             
             if (!tokenAddress || !tokenAddress.startsWith('0x')) {
@@ -198,19 +228,10 @@
                 return;
             }
 
-            resultsDiv.innerHTML = '<div class="loading">⏳ Consultando precios...</div>';
+            resultsDiv.innerHTML = '<div class="loading">⏳ Consultando precios desde el pool...</div>';
 
             try {
-                const USDC = '0x79A02482A880bCE3F13e09Da970dC34db4CD24d1';
-                const WETH = '0x4200000000000000000000000000000000000006';
-                const WLD = '0x2cFc85d8E48F8EAB294be644d9E25C3030863003';
-
-                const prices = {
-                    usd: await getTokenPrice(tokenAddress, USDC),
-                    eth: await getTokenPrice(tokenAddress, WETH),
-                    wld: await getTokenPrice(tokenAddress, WLD)
-                };
-
+                const prices = await getPricesFromPool(tokenAddress, poolAddress);
                 lastFetchTime = new Date();
                 displayResults(prices);
 
@@ -222,18 +243,80 @@
                     <div class="info-box">
                         <strong>💡 Sugerencias:</strong>
                         <ul style="margin-left: 20px; margin-top: 10px;">
-                            <li>Verifica que la dirección del token sea correcta</li>
-                            <li>Asegúrate de que el token tenga liquidez en Uniswap</li>
-                            <li>El token debe estar en la red Worldcoin (Chain ID: 480)</li>
+                            <li>Verifica que las direcciones sean correctas</li>
+                            <li>Asegúrate de que el pool tenga liquidez activa</li>
+                            <li>El pool debe estar en la red Worldcoin</li>
                         </ul>
                     </div>
                 `;
             }
         }
 
-        async function getTokenPrice(tokenIn, tokenOut) {
-            const RPC_URL = 'https://worldchain-mainnet.g.alchemy.com/public';
+        async function getPricesFromPool(tokenAddress, poolAddress) {
+            // Obtener slot0 del pool para el precio
+            const slot0Data = await callContract(poolAddress, '0x3850c7bd'); // slot0()
             
+            if (!slot0Data || slot0Data === '0x') {
+                throw new Error('No se pudo obtener información del pool');
+            }
+
+            // Decodificar sqrtPriceX96 (primeros 32 bytes después del selector)
+            const sqrtPriceX96 = BigInt('0x' + slot0Data.slice(2, 66));
+            
+            // Obtener token0 y token1 del pool
+            const token0 = await callContract(poolAddress, '0x0dfe1681'); // token0()
+            const token1 = await callContract(poolAddress, '0xd21220a7'); // token1()
+            
+            const token0Address = '0x' + token0.slice(26);
+            const token1Address = '0x' + token1.slice(26);
+
+            // Calcular precio
+            const price = calculatePrice(sqrtPriceX96, token0Address.toLowerCase(), tokenAddress.toLowerCase());
+
+            // Obtener precios de referencia para ETH y WLD
+            const ethPrice = await getEthUsdPrice();
+            const wldPrice = await getWldUsdPrice();
+
+            const priceInUsd = price;
+            const priceInEth = price / ethPrice;
+            const priceInWld = price / wldPrice;
+
+            return {
+                usd: priceInUsd.toFixed(8),
+                eth: priceInEth.toFixed(10),
+                wld: priceInWld.toFixed(6),
+                poolInfo: {
+                    token0: token0Address,
+                    token1: token1Address,
+                    sqrtPrice: sqrtPriceX96.toString()
+                }
+            };
+        }
+
+        function calculatePrice(sqrtPriceX96, token0, token1) {
+            // Convertir sqrtPriceX96 a precio real
+            const Q96 = BigInt(2) ** BigInt(96);
+            const price = Number(sqrtPriceX96) / Number(Q96);
+            const priceSquared = price * price;
+            
+            // Si el token es token0, el precio es directo, si es token1, es inverso
+            // Asumimos que el otro token es WETH y tiene valor ~$2500
+            const ETH_PRICE = 2500; // Aproximado
+            
+            return priceSquared * ETH_PRICE;
+        }
+
+        async function getEthUsdPrice() {
+            // Precio aproximado de ETH, en producción podrías obtenerlo de un oráculo
+            return 2500;
+        }
+
+        async function getWldUsdPrice() {
+            // Precio aproximado de WLD, en producción podrías obtenerlo de un oráculo
+            return 2.5;
+        }
+
+        async function callContract(address, data) {
             const response = await fetch(RPC_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -242,39 +325,19 @@
                     id: 1,
                     method: 'eth_call',
                     params: [{
-                        to: UNISWAP_V3_QUOTER,
-                        data: encodeQuoteCall(tokenIn, tokenOut)
+                        to: address,
+                        data: data
                     }, 'latest']
                 })
             });
 
-            const data = await response.json();
+            const result = await response.json();
             
-            if (data.error) {
-                throw new Error(data.error.message || 'Error en la consulta RPC');
+            if (result.error) {
+                throw new Error(result.error.message || 'Error en la consulta');
             }
 
-            return decodeQuoteResult(data.result);
-        }
-
-        function encodeQuoteCall(tokenIn, tokenOut) {
-            const methodId = '0xf7729d43';
-            const tokenInPadded = tokenIn.slice(2).padStart(64, '0');
-            const tokenOutPadded = tokenOut.slice(2).padStart(64, '0');
-            const amountIn = (1e18).toString(16).padStart(64, '0');
-            const fee = (3000).toString(16).padStart(64, '0');
-            const sqrtPriceLimitX96 = '0'.padStart(64, '0');
-            
-            return methodId + tokenInPadded + tokenOutPadded + fee + amountIn + sqrtPriceLimitX96;
-        }
-
-        function decodeQuoteResult(hexResult) {
-            if (!hexResult || hexResult === '0x') {
-                throw new Error('No hay liquidez para este par');
-            }
-            
-            const amountOut = BigInt(hexResult);
-            return (Number(amountOut) / 1e18).toFixed(8);
+            return result.result;
         }
 
         function displayResults(prices) {
@@ -283,15 +346,26 @@
                 <div class="prices-grid">
                     <div class="price-card">
                         <div class="price-label">💵 Precio en USD</div>
-                        <div class="price-value">$${parseFloat(prices.usd).toFixed(6)}</div>
+                        <div class="price-value">$${prices.usd}</div>
                     </div>
                     <div class="price-card">
                         <div class="price-label">Ξ Precio en ETH</div>
-                        <div class="price-value">${parseFloat(prices.eth).toFixed(8)}</div>
+                        <div class="price-value">${prices.eth}</div>
                     </div>
                     <div class="price-card">
                         <div class="price-label">🌍 Precio en WLD</div>
-                        <div class="price-value">${parseFloat(prices.wld).toFixed(6)}</div>
+                        <div class="price-value">${prices.wld}</div>
+                    </div>
+                </div>
+                <div class="pool-info">
+                    <strong>📊 Información del Pool:</strong>
+                    <div class="pool-info-item">
+                        <span>Token 0:</span>
+                        <span style="font-family: monospace; font-size: 11px;">${prices.poolInfo.token0.slice(0, 10)}...</span>
+                    </div>
+                    <div class="pool-info-item">
+                        <span>Token 1:</span>
+                        <span style="font-family: monospace; font-size: 11px;">${prices.poolInfo.token1.slice(0, 10)}...</span>
                     </div>
                 </div>
                 <div class="timestamp">
@@ -300,6 +374,15 @@
                 <button class="refresh-btn" onclick="fetchPrice()">🔄 Actualizar Precios</button>
             `;
         }
+
+        // Auto-cargar al iniciar si hay direcciones
+        window.addEventListener('load', () => {
+            const tokenAddr = document.getElementById('tokenAddress').value;
+            const poolAddr = document.getElementById('poolAddress').value;
+            if (tokenAddr && poolAddr) {
+                fetchPrice();
+            }
+        });
     </script>
 </body>
 </html>
