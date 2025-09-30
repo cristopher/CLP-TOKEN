@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor de Precio Uniswap</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 800px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .input-group {
+            margin-bottom: 30px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 14px 30px;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .prices-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+
+        .price-card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            padding: 25px;
+            border-radius: 15px;
+            text-align: center;
+            transition: transform 0.3s;
+        }
+
+        .price-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .price-label {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .price-value {
+            font-size: 28px;
+            color: #333;
+            font-weight: bold;
+            word-break: break-all;
+        }
+
+        .error {
+            background: #fee;
+            border-left: 4px solid #f44;
+            padding: 15px;
+            margin-top: 20px;
+            border-radius: 5px;
+            color: #c33;
+        }
+
+        .loading {
+            text-align: center;
+            color: #667eea;
+            font-size: 16px;
+            margin-top: 20px;
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin-top: 20px;
+            border-radius: 5px;
+            font-size: 14px;
+            color: #1565c0;
+        }
+
+        .timestamp {
+            text-align: center;
+            color: #999;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+
+        .refresh-btn {
+            margin-top: 20px;
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🪙 Monitor de Precio Uniswap</h1>
+        <p class="subtitle">Worldcoin Network</p>
+
+        <div class="input-group">
+            <label for="tokenAddress">Dirección del Token:</label>
+            <input type="text" id="tokenAddress" placeholder="0x..." />
+        </div>
+
+        <button id="fetchBtn" onclick="fetchPrice()">Consultar Precio</button>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const WORLDCOIN_CHAIN_ID = 480;
+        const UNISWAP_V3_QUOTER = '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6';
+        
+        let lastFetchTime = null;
+
+        async function fetchPrice() {
+            const tokenAddress = document.getElementById('tokenAddress').value.trim();
+            const resultsDiv = document.getElementById('results');
+            
+            if (!tokenAddress || !tokenAddress.startsWith('0x')) {
+                resultsDiv.innerHTML = '<div class="error">Por favor ingresa una dirección de token válida</div>';
+                return;
+            }
+
+            resultsDiv.innerHTML = '<div class="loading">⏳ Consultando precios...</div>';
+
+            try {
+                const USDC = '0x79A02482A880bCE3F13e09Da970dC34db4CD24d1';
+                const WETH = '0x4200000000000000000000000000000000000006';
+                const WLD = '0x2cFc85d8E48F8EAB294be644d9E25C3030863003';
+
+                const prices = {
+                    usd: await getTokenPrice(tokenAddress, USDC),
+                    eth: await getTokenPrice(tokenAddress, WETH),
+                    wld: await getTokenPrice(tokenAddress, WLD)
+                };
+
+                lastFetchTime = new Date();
+                displayResults(prices);
+
+            } catch (error) {
+                resultsDiv.innerHTML = `
+                    <div class="error">
+                        <strong>Error:</strong> ${error.message}
+                    </div>
+                    <div class="info-box">
+                        <strong>💡 Sugerencias:</strong>
+                        <ul style="margin-left: 20px; margin-top: 10px;">
+                            <li>Verifica que la dirección del token sea correcta</li>
+                            <li>Asegúrate de que el token tenga liquidez en Uniswap</li>
+                            <li>El token debe estar en la red Worldcoin (Chain ID: 480)</li>
+                        </ul>
+                    </div>
+                `;
+            }
+        }
+
+        async function getTokenPrice(tokenIn, tokenOut) {
+            const RPC_URL = 'https://worldchain-mainnet.g.alchemy.com/public';
+            
+            const response = await fetch(RPC_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: 1,
+                    method: 'eth_call',
+                    params: [{
+                        to: UNISWAP_V3_QUOTER,
+                        data: encodeQuoteCall(tokenIn, tokenOut)
+                    }, 'latest']
+                })
+            });
+
+            const data = await response.json();
+            
+            if (data.error) {
+                throw new Error(data.error.message || 'Error en la consulta RPC');
+            }
+
+            return decodeQuoteResult(data.result);
+        }
+
+        function encodeQuoteCall(tokenIn, tokenOut) {
+            const methodId = '0xf7729d43';
+            const tokenInPadded = tokenIn.slice(2).padStart(64, '0');
+            const tokenOutPadded = tokenOut.slice(2).padStart(64, '0');
+            const amountIn = (1e18).toString(16).padStart(64, '0');
+            const fee = (3000).toString(16).padStart(64, '0');
+            const sqrtPriceLimitX96 = '0'.padStart(64, '0');
+            
+            return methodId + tokenInPadded + tokenOutPadded + fee + amountIn + sqrtPriceLimitX96;
+        }
+
+        function decodeQuoteResult(hexResult) {
+            if (!hexResult || hexResult === '0x') {
+                throw new Error('No hay liquidez para este par');
+            }
+            
+            const amountOut = BigInt(hexResult);
+            return (Number(amountOut) / 1e18).toFixed(8);
+        }
+
+        function displayResults(prices) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = `
+                <div class="prices-grid">
+                    <div class="price-card">
+                        <div class="price-label">💵 Precio en USD</div>
+                        <div class="price-value">$${parseFloat(prices.usd).toFixed(6)}</div>
+                    </div>
+                    <div class="price-card">
+                        <div class="price-label">Ξ Precio en ETH</div>
+                        <div class="price-value">${parseFloat(prices.eth).toFixed(8)}</div>
+                    </div>
+                    <div class="price-card">
+                        <div class="price-label">🌍 Precio en WLD</div>
+                        <div class="price-value">${parseFloat(prices.wld).toFixed(6)}</div>
+                    </div>
+                </div>
+                <div class="timestamp">
+                    Última actualización: ${lastFetchTime.toLocaleString('es-ES')}
+                </div>
+                <button class="refresh-btn" onclick="fetchPrice()">🔄 Actualizar Precios</button>
+            `;
+        }
+    </script>
+</body>
+</html>
