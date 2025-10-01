@@ -135,6 +135,20 @@
             word-break: break-all;
         }
 
+        .price-change {
+            font-size: 14px;
+            margin-top: 8px;
+            font-weight: 600;
+        }
+
+        .positive {
+            color: #10b981;
+        }
+
+        .negative {
+            color: #ef4444;
+        }
+
         .error {
             background: #fee;
             border-left: 4px solid #f44;
@@ -190,28 +204,25 @@
         .pool-info-item:last-child {
             margin-bottom: 0;
         }
+
+        a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🪙 Monitor de Precio Uniswap</h1>
-        <p class="subtitle">Worldcoin Network</p>
-
-        <div class="input-group">
-            <label for="apiKey">🔑 Alchemy API Key:</label>
-            <input type="password" id="apiKey" placeholder="Tu API key de Alchemy" />
-            <div class="helper-text">Obtén tu API key gratis en <a href="https://www.alchemy.com/" target="_blank">alchemy.com</a></div>
-        </div>
+        <p class="subtitle">Worldcoin Network - API de Uniswap</p>
 
         <div class="input-group">
             <label for="tokenAddress">Dirección del Token:</label>
-            <input type="text" id="tokenAddress" placeholder="0x13Cd5E3EC12870eb6aE6BcC71b56860C1a1475C4" value="0x13Cd5E3EC12870eb6aE6BcC71b56860C1a1475C4" />
-        </div>
-
-        <div class="input-group">
-            <label for="poolAddress">Dirección del Pool (opcional):</label>
-            <input type="text" id="poolAddress" placeholder="0x4fF938ecf56aF77B12f050fA6A3C41E2a12aD08d" value="0x4fF938ecf56aF77B12f050fA6A3C41E2a12aD08d" />
-            <div class="helper-text">Si conoces el pool específico, ingrésalo aquí para mayor precisión</div>
+            <input type="text" id="tokenAddress" placeholder="0x..." value="0x13Cd5E3EC12870eb6aE6BcC71b56860C1a1475C4" />
         </div>
 
         <button id="fetchBtn" onclick="fetchPrice()">Consultar Precio</button>
@@ -220,164 +231,187 @@
     </div>
 
     <script>
+        const WORLDCHAIN_ID = 480;
+        const UNISWAP_API = 'https://api.uniswap.org/v2/graphql';
+        
         let lastFetchTime = null;
 
         async function fetchPrice() {
-            const apiKey = document.getElementById('apiKey').value.trim();
-            const tokenAddress = document.getElementById('tokenAddress').value.trim();
-            const poolAddress = document.getElementById('poolAddress').value.trim();
+            const tokenAddress = document.getElementById('tokenAddress').value.trim().toLowerCase();
             const resultsDiv = document.getElementById('results');
-            
-            if (!apiKey) {
-                resultsDiv.innerHTML = '<div class="error">Por favor ingresa tu Alchemy API Key</div>';
-                return;
-            }
             
             if (!tokenAddress || !tokenAddress.startsWith('0x')) {
                 resultsDiv.innerHTML = '<div class="error">Por favor ingresa una dirección de token válida</div>';
                 return;
             }
 
-            resultsDiv.innerHTML = '<div class="loading">⏳ Consultando precios desde el pool...</div>';
+            resultsDiv.innerHTML = '<div class="loading">⏳ Consultando precio desde Uniswap API...</div>';
 
             try {
-                const RPC_URL = `https://worldchain-mainnet.g.alchemy.com/v2/${apiKey}`;
-                const prices = await getPricesFromPool(tokenAddress, poolAddress, RPC_URL);
+                // Query GraphQL para obtener información del token
+                const query = `
+                    query Token($chain: Chain!, $address: String!) {
+                        token(chain: $chain, address: $address) {
+                            address
+                            name
+                            symbol
+                            decimals
+                            project {
+                                markets(currencies: [USD]) {
+                                    price {
+                                        value
+                                    }
+                                    pricePercentChange(duration: DAY) {
+                                        value
+                                    }
+                                }
+                            }
+                        }
+                    }
+                `;
+
+                const response = await fetch(UNISWAP_API, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        query: query,
+                        variables: {
+                            chain: 'WORLDCHAIN',
+                            address: tokenAddress
+                        }
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.errors) {
+                    throw new Error(data.errors[0].message);
+                }
+
+                if (!data.data || !data.data.token) {
+                    throw new Error('Token no encontrado en Uniswap');
+                }
+
+                const tokenData = data.data.token;
+                const priceUSD = tokenData.project?.markets?.[0]?.price?.value;
+                const priceChange = tokenData.project?.markets?.[0]?.pricePercentChange?.value;
+
+                if (!priceUSD) {
+                    throw new Error('No hay datos de precio disponibles para este token');
+                }
+
+                // Obtener precios de ETH y WLD para conversión
+                const ethPrice = await getReferencePrice('0x4200000000000000000000000000000000000006'); // WETH
+                const wldPrice = await getReferencePrice('0x2cFc85d8E48F8EAB294be644d9E25C3030863003'); // WLD
+
+                const prices = {
+                    usd: parseFloat(priceUSD),
+                    eth: ethPrice ? parseFloat(priceUSD) / ethPrice : null,
+                    wld: wldPrice ? parseFloat(priceUSD) / wldPrice : null,
+                    change24h: priceChange ? parseFloat(priceChange) : null,
+                    tokenInfo: {
+                        name: tokenData.name,
+                        symbol: tokenData.symbol,
+                        decimals: tokenData.decimals
+                    }
+                };
+
                 lastFetchTime = new Date();
                 displayResults(prices);
 
             } catch (error) {
+                console.error('Error:', error);
                 resultsDiv.innerHTML = `
                     <div class="error">
                         <strong>Error:</strong> ${error.message}
                     </div>
                     <div class="info-box">
-                        <strong>💡 Sugerencias:</strong>
-                        <ul style="margin-left: 20px; margin-top: 10px;">
-                            <li>Verifica que las direcciones sean correctas</li>
-                            <li>Asegúrate de que el pool tenga liquidez activa</li>
-                            <li>El pool debe estar en la red Worldcoin</li>
-                        </ul>
+                        <strong>💡 Información:</strong><br>
+                        La API de Uniswap puede no tener datos para todos los tokens en Worldchain. 
+                        Asegúrate de que tu token tenga liquidez activa en Uniswap V3.
+                        <br><br>
+                        <strong>Alternativas:</strong><br>
+                        • Verifica el token en <a href="https://app.uniswap.org" target="_blank">Uniswap Interface</a><br>
+                        • Consulta en <a href="https://worldscan.org/address/${tokenAddress}" target="_blank">Worldscan</a>
                     </div>
                 `;
             }
         }
 
-        async function getPricesFromPool(tokenAddress, poolAddress, rpcUrl) {
-            // Obtener slot0 del pool para el precio
-            const slot0Data = await callContract(poolAddress, '0x3850c7bd', rpcUrl); // slot0()
-            
-            if (!slot0Data || slot0Data === '0x') {
-                throw new Error('No se pudo obtener información del pool');
+        async function getReferencePrice(tokenAddress) {
+            try {
+                const query = `
+                    query Token($chain: Chain!, $address: String!) {
+                        token(chain: $chain, address: $address) {
+                            project {
+                                markets(currencies: [USD]) {
+                                    price {
+                                        value
+                                    }
+                                }
+                            }
+                        }
+                    }
+                `;
+
+                const response = await fetch(UNISWAP_API, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        query: query,
+                        variables: {
+                            chain: 'WORLDCHAIN',
+                            address: tokenAddress.toLowerCase()
+                        }
+                    })
+                });
+
+                const data = await response.json();
+                return parseFloat(data.data?.token?.project?.markets?.[0]?.price?.value);
+            } catch (error) {
+                console.error('Error obteniendo precio de referencia:', error);
+                return null;
             }
-
-            // Decodificar sqrtPriceX96 (primeros 32 bytes después del selector)
-            const sqrtPriceX96 = BigInt('0x' + slot0Data.slice(2, 66));
-            
-            // Obtener token0 y token1 del pool
-            const token0 = await callContract(poolAddress, '0x0dfe1681', rpcUrl); // token0()
-            const token1 = await callContract(poolAddress, '0xd21220a7', rpcUrl); // token1()
-            
-            const token0Address = '0x' + token0.slice(26);
-            const token1Address = '0x' + token1.slice(26);
-
-            // Calcular precio
-            const price = calculatePrice(sqrtPriceX96, token0Address.toLowerCase(), tokenAddress.toLowerCase());
-
-            // Obtener precios de referencia para ETH y WLD
-            const ethPrice = await getEthUsdPrice();
-            const wldPrice = await getWldUsdPrice();
-
-            const priceInUsd = price;
-            const priceInEth = price / ethPrice;
-            const priceInWld = price / wldPrice;
-
-            return {
-                usd: priceInUsd.toFixed(8),
-                eth: priceInEth.toFixed(10),
-                wld: priceInWld.toFixed(6),
-                poolInfo: {
-                    token0: token0Address,
-                    token1: token1Address,
-                    sqrtPrice: sqrtPriceX96.toString()
-                }
-            };
-        }
-
-        function calculatePrice(sqrtPriceX96, token0, token1) {
-            // Convertir sqrtPriceX96 a precio real
-            const Q96 = BigInt(2) ** BigInt(96);
-            const price = Number(sqrtPriceX96) / Number(Q96);
-            const priceSquared = price * price;
-            
-            // Si el token es token0, el precio es directo, si es token1, es inverso
-            // Asumimos que el otro token es WETH y tiene valor ~$2500
-            const ETH_PRICE = 2500; // Aproximado
-            
-            return priceSquared * ETH_PRICE;
-        }
-
-        async function getEthUsdPrice() {
-            // Precio aproximado de ETH, en producción podrías obtenerlo de un oráculo
-            return 2500;
-        }
-
-        async function getWldUsdPrice() {
-            // Precio aproximado de WLD, en producción podrías obtenerlo de un oráculo
-            return 2.5;
-        }
-
-        async function callContract(address, data, rpcUrl) {
-            const response = await fetch(rpcUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    jsonrpc: '2.0',
-                    id: 1,
-                    method: 'eth_call',
-                    params: [{
-                        to: address,
-                        data: data
-                    }, 'latest']
-                })
-            });
-
-            const result = await response.json();
-            
-            if (result.error) {
-                throw new Error(result.error.message || 'Error en la consulta');
-            }
-
-            return result.result;
         }
 
         function displayResults(prices) {
             const resultsDiv = document.getElementById('results');
+            
+            const changeClass = prices.change24h >= 0 ? 'positive' : 'negative';
+            const changeSymbol = prices.change24h >= 0 ? '▲' : '▼';
+            const changeDisplay = prices.change24h !== null ? 
+                `<div class="price-change ${changeClass}">${changeSymbol} ${Math.abs(prices.change24h).toFixed(2)}% (24h)</div>` : '';
+
             resultsDiv.innerHTML = `
+                <div class="pool-info">
+                    <strong>📊 ${prices.tokenInfo.name} (${prices.tokenInfo.symbol})</strong>
+                    <div class="pool-info-item">
+                        <span>Decimales:</span>
+                        <span>${prices.tokenInfo.decimals}</span>
+                    </div>
+                </div>
                 <div class="prices-grid">
                     <div class="price-card">
                         <div class="price-label">💵 Precio en USD</div>
-                        <div class="price-value">$${prices.usd}</div>
+                        <div class="price-value">$${prices.usd.toFixed(8)}</div>
+                        ${changeDisplay}
                     </div>
+                    ${prices.eth ? `
                     <div class="price-card">
                         <div class="price-label">Ξ Precio en ETH</div>
-                        <div class="price-value">${prices.eth}</div>
+                        <div class="price-value">${prices.eth.toFixed(10)}</div>
                     </div>
+                    ` : ''}
+                    ${prices.wld ? `
                     <div class="price-card">
                         <div class="price-label">🌍 Precio en WLD</div>
-                        <div class="price-value">${prices.wld}</div>
+                        <div class="price-value">${prices.wld.toFixed(8)}</div>
                     </div>
-                </div>
-                <div class="pool-info">
-                    <strong>📊 Información del Pool:</strong>
-                    <div class="pool-info-item">
-                        <span>Token 0:</span>
-                        <span style="font-family: monospace; font-size: 11px;">${prices.poolInfo.token0.slice(0, 10)}...</span>
-                    </div>
-                    <div class="pool-info-item">
-                        <span>Token 1:</span>
-                        <span style="font-family: monospace; font-size: 11px;">${prices.poolInfo.token1.slice(0, 10)}...</span>
-                    </div>
+                    ` : ''}
                 </div>
                 <div class="timestamp">
                     Última actualización: ${lastFetchTime.toLocaleString('es-ES')}
@@ -385,15 +419,6 @@
                 <button class="refresh-btn" onclick="fetchPrice()">🔄 Actualizar Precios</button>
             `;
         }
-
-        // Auto-cargar al iniciar si hay direcciones
-        window.addEventListener('load', () => {
-            const tokenAddr = document.getElementById('tokenAddress').value;
-            const poolAddr = document.getElementById('poolAddress').value;
-            if (tokenAddr && poolAddr) {
-                fetchPrice();
-            }
-        });
     </script>
 </body>
 </html>
